@@ -1,0 +1,203 @@
+# Gold Rush custom Semgrep rules
+# Invoked via: semgrep scan --config .claude/security/semgrep/
+# Reference: https://semgrep.dev/docs/writing-rules/overview
+
+rules:
+  # ────────────────────────────────────────────────────
+  # CLERK
+  # ────────────────────────────────────────────────────
+  - id: gold-rush-clerk-unprotected-api-route
+    message: >-
+      API route does not call auth() or currentUser(). Every /api/**/route.ts
+      must verify authentication unless it's a webhook or public endpoint.
+    severity: ERROR
+    languages: [typescript, tsx]
+    paths:
+      include:
+        - "**/app/api/**/route.ts"
+        - "**/app/api/**/route.tsx"
+        - "**/src/app/api/**/route.ts"
+      exclude:
+        - "**/api/webhooks/**"
+        - "**/api/health/**"
+        - "**/api/public/**"
+    patterns:
+      - pattern-either:
+          - pattern: export async function GET(...) { ... }
+          - pattern: export async function POST(...) { ... }
+          - pattern: export async function PUT(...) { ... }
+          - pattern: export async function PATCH(...) { ... }
+          - pattern: export async function DELETE(...) { ... }
+      - pattern-not-regex: 'auth\(\)|currentUser\(\)'
+
+  - id: gold-rush-clerk-webhook-no-svix
+    message: >-
+      Clerk webhook handler missing Svix signature verification.
+      Must use `new Webhook(secret).verify(body, headers)` before trusting payload.
+    severity: ERROR
+    languages: [typescript, tsx]
+    paths:
+      include:
+        - "**/api/webhooks/clerk/route.ts"
+    pattern-not-regex: 'svix|Webhook\s*\('
+
+  # ────────────────────────────────────────────────────
+  # STRIPE
+  # ────────────────────────────────────────────────────
+  - id: gold-rush-stripe-webhook-no-verify
+    message: >-
+      Stripe webhook handler missing stripe.webhooks.constructEvent().
+      Never trust webhook body without signature verification.
+    severity: ERROR
+    languages: [typescript, tsx]
+    paths:
+      include:
+        - "**/api/webhooks/stripe/route.ts"
+    pattern-not-regex: 'constructEvent'
+
+  - id: gold-rush-stripe-json-not-raw-body
+    message: >-
+      Stripe webhook handler uses req.json() instead of req.text().
+      constructEvent requires the RAW body; req.json() destroys the signature.
+    severity: ERROR
+    languages: [typescript, tsx]
+    paths:
+      include:
+        - "**/api/webhooks/stripe/route.ts"
+    pattern: |
+      await req.json()
+
+  - id: gold-rush-stripe-idempotency-missing
+    message: >-
+      Stripe payment/subscription/checkout create call missing idempotencyKey.
+      Prevents duplicate charges on retry.
+    severity: WARNING
+    languages: [typescript, tsx]
+    patterns:
+      - pattern-either:
+          - pattern: stripe.paymentIntents.create($ARG)
+          - pattern: stripe.subscriptions.create($ARG)
+          - pattern: stripe.checkout.sessions.create($ARG)
+      - pattern-not: stripe.$METHOD.create($ARG, { ..., idempotencyKey: ..., ... })
+      - pattern-not: stripe.$METHOD.create($ARG, { idempotencyKey: ..., ... })
+
+  # ────────────────────────────────────────────────────
+  # SUPABASE
+  # ────────────────────────────────────────────────────
+  - id: gold-rush-supabase-service-role-in-client
+    message: >-
+      service_role key referenced in client-side code. service_role bypasses
+      RLS and must only be used server-side (route handlers, server actions,
+      edge functions).
+    severity: ERROR
+    languages: [typescript, tsx]
+    paths:
+      include:
+        - "**/app/components/**"
+        - "**/app/hooks/**"
+        - "**/src/components/**"
+        - "**/src/hooks/**"
+    pattern-regex: 'service_role|SUPABASE_SERVICE_ROLE|supabaseServiceRoleKey'
+
+  - id: gold-rush-supabase-raw-sql-concat
+    message: >-
+      Raw SQL with string concatenation detected. Risk of injection and RLS
+      bypass. Use parameterized queries via supabase.rpc() or query builder.
+    severity: ERROR
+    languages: [typescript, tsx]
+    patterns:
+      - pattern-either:
+          - pattern: supabase.rpc($FN, { query: `SELECT ${$X}...` })
+          - pattern: |
+              `SELECT ${$X} FROM ...`
+          - pattern: |
+              `INSERT INTO ... ${$X}`
+
+  # ────────────────────────────────────────────────────
+  # NEXT.JS
+  # ────────────────────────────────────────────────────
+  - id: gold-rush-dangerously-set-inner-html
+    message: >-
+      dangerouslySetInnerHTML bypasses React's XSS protection. Verify the
+      content is sanitized (DOMPurify) or come from trusted source.
+    severity: WARNING
+    languages: [typescript, tsx, javascript, jsx]
+    pattern-regex: 'dangerouslySetInnerHTML'
+
+  - id: gold-rush-server-action-no-auth
+    message: >-
+      Server Action file ('use server') does not call auth()/currentUser()
+      in the first 80 lines. Server actions are RPC endpoints — auth is required.
+    severity: ERROR
+    languages: [typescript, tsx]
+    patterns:
+      - pattern-inside: |
+          'use server';
+          ...
+      - pattern-either:
+          - pattern: export async function $FN(...) { ... }
+          - pattern: export const $FN = async (...) => { ... }
+      - pattern-not-regex: 'auth\(\)|currentUser\(\)'
+
+  - id: gold-rush-open-redirect
+    message: >-
+      redirect() with user-controlled URL. Validate against allowlist to
+      prevent open-redirect.
+    severity: WARNING
+    languages: [typescript, tsx]
+    patterns:
+      - pattern-either:
+          - pattern: redirect($URL)
+          - pattern: NextResponse.redirect($URL)
+      - pattern-not: redirect("/...")
+      - pattern-not: NextResponse.redirect(new URL("/...", ...))
+
+  # ────────────────────────────────────────────────────
+  # LLM / AI
+  # ────────────────────────────────────────────────────
+  - id: gold-rush-llm-prompt-user-concat
+    message: >-
+      User input concatenated into LLM prompt without delimiting. Use XML
+      tags or explicit fencing to prevent prompt injection.
+    severity: WARNING
+    languages: [typescript, tsx]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              anthropic.messages.create({..., messages: [..., { content: `...${$USER}...` }, ...] })
+          - pattern: |
+              openai.chat.completions.create({..., messages: [..., { content: `...${$USER}...` }, ...] })
+          - pattern: |
+              generateText({..., prompt: `...${$USER}...` })
+
+  # ────────────────────────────────────────────────────
+  # GENERIC
+  # ────────────────────────────────────────────────────
+  - id: gold-rush-console-log-near-secrets
+    message: >-
+      console.log near auth/payment/token code. Risk of accidentally logging
+      sensitive data. Use a logger with redaction instead.
+    severity: INFO
+    languages: [typescript, tsx, javascript, jsx]
+    patterns:
+      - pattern-either:
+          - pattern: console.log(..., $AUTH, ...)
+          - pattern: console.log(..., $TOKEN, ...)
+          - pattern: console.log(..., $KEY, ...)
+      - metavariable-regex:
+          metavariable: $AUTH
+          regex: '.*(token|secret|key|password|jwt|session).*'
+
+  - id: gold-rush-hardcoded-jwt
+    message: >-
+      Hardcoded JWT literal in source code. Move to environment variable.
+    severity: ERROR
+    languages: [typescript, tsx, javascript, jsx, python]
+    pattern-regex: '[\"'']eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}[\"'']'
+
+  - id: gold-rush-http-url-in-production
+    message: >-
+      HTTP (non-HTTPS) URL in code. Verify this is not for production use.
+    severity: INFO
+    languages: [typescript, tsx, javascript, jsx]
+    pattern-regex: '["'']http://(?!localhost|127\.0\.0\.1)[^"'']+["'']'

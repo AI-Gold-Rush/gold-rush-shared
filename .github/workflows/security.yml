@@ -1,0 +1,235 @@
+name: Security (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: 'Primary stack of the caller repo: nextjs | react-native | python | mixed | docs'
+        required: true
+        type: string
+      enable_bandit:
+        description: 'Run Bandit Python SAST'
+        required: false
+        default: false
+        type: boolean
+      enable_trivy:
+        description: 'Run Trivy filesystem + dependency scan'
+        required: false
+        default: true
+        type: boolean
+      enable_zap:
+        description: 'Run OWASP ZAP baseline scan (requires preview URL)'
+        required: false
+        default: false
+        type: boolean
+      preview_url:
+        description: 'Preview deployment URL for DAST (Vercel/etc)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  # ─── Tier 1: Secrets ────────────────────────────────────────
+  secrets-gitleaks:
+    name: secrets-gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout shared configs
+        uses: actions/checkout@v4
+        with:
+          repository: rich1edwards/gold-rush-shared
+          path: .shared
+          ref: main
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .shared/security/gitleaks.toml
+
+  secrets-trufflehog:
+    name: secrets-trufflehog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: TruffleHog scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          head: ${{ github.event.pull_request.head.sha || github.sha }}
+          extra_args: --only-verified
+
+  # ─── Tier 1: SAST ───────────────────────────────────────────
+  sast-semgrep:
+    name: sast-semgrep
+    runs-on: ubuntu-latest
+    if: inputs.stack != 'docs'
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: rich1edwards/gold-rush-shared
+          path: .shared
+          ref: main
+      - name: Run Semgrep
+        env:
+          SEMGREP_RULES: >-
+            p/owasp-top-ten
+            p/security-audit
+            p/typescript
+            p/javascript
+            p/nextjs
+            p/react
+            .shared/security/semgrep/gold-rush-rules.yml
+        run: semgrep ci --sarif --output=semgrep.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ─── Tier 1: SCA (JS/TS) ────────────────────────────────────
+  sca-npm-audit:
+    name: sca-npm-audit
+    runs-on: ubuntu-latest
+    if: contains(fromJSON('["nextjs","react-native","mixed"]'), inputs.stack)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: npm audit (production)
+        run: |
+          if [ -f package-lock.json ]; then
+            npm audit --omit=dev --audit-level=high || echo "::warning::npm audit found high/critical vulns"
+          fi
+
+  sca-osv:
+    name: sca-osv
+    runs-on: ubuntu-latest
+    if: inputs.stack != 'docs'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: rich1edwards/gold-rush-shared
+          path: .shared
+          ref: main
+      - name: Run osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.0
+        with:
+          scan-args: |-
+            --config=.shared/security/osv-scanner.toml
+            --recursive
+            --skip-git
+            ./
+
+  # ─── Tier 2: Python SAST ────────────────────────────────────
+  sast-bandit:
+    name: sast-bandit
+    runs-on: ubuntu-latest
+    if: inputs.enable_bandit || contains(fromJSON('["python","mixed"]'), inputs.stack)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install bandit[toml]
+      - run: bandit -r . -ll -x tests,.venv,node_modules -f json -o bandit.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit.json
+
+  # ─── Tier 2: Trivy (broad scan) ─────────────────────────────
+  sca-trivy:
+    name: sca-trivy
+    runs-on: ubuntu-latest
+    if: inputs.enable_trivy && inputs.stack != 'docs'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  # ─── Tier 3: DAST (optional, requires preview URL) ──────────
+  dast-zap:
+    name: dast-zap
+    runs-on: ubuntu-latest
+    if: inputs.enable_zap && inputs.preview_url != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: ${{ inputs.preview_url }}
+          cmd_options: '-a -j -m 5'
+          fail_action: false
+
+  # ─── SBOM ───────────────────────────────────────────────────
+  sbom-syft:
+    name: sbom-syft
+    runs-on: ubuntu-latest
+    if: inputs.stack != 'docs'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+
+  # ─── Aggregate gate ─────────────────────────────────────────
+  security-status:
+    name: security-status
+    needs:
+      - secrets-gitleaks
+      - secrets-trufflehog
+      - sast-semgrep
+      - sca-osv
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate Tier 1 gate
+        run: |
+          fail=0
+          for r in "${{ needs.secrets-gitleaks.result }}" \
+                   "${{ needs.secrets-trufflehog.result }}" \
+                   "${{ needs.sast-semgrep.result }}" \
+                   "${{ needs.sca-osv.result }}"; do
+            if [ "$r" = "failure" ]; then fail=1; fi
+          done
+          if [ $fail -eq 1 ]; then
+            echo "::error::Tier 1 security gate FAILED — blocking merge"
+            exit 1
+          fi
+          echo "::notice::Tier 1 security gate PASSED"

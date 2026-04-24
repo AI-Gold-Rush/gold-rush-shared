@@ -1,0 +1,85 @@
+name: DAST Preview (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      preview_url:
+        description: 'Vercel preview URL to scan'
+        required: true
+        type: string
+      severity:
+        description: 'Minimum severity to report (low|medium|high|critical)'
+        required: false
+        default: 'medium'
+        type: string
+      fail_on_findings:
+        description: 'Fail the workflow if findings at/above severity exist'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      preview_auth_cookie:
+        description: 'Optional cookie header to authenticate to protected routes'
+        required: false
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  dast-nuclei:
+    name: dast-nuclei
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nuclei scan
+        uses: projectdiscovery/nuclei-action@v3
+        with:
+          target: ${{ inputs.preview_url }}
+          severity: ${{ inputs.severity }},high,critical
+          output: nuclei.sarif
+          sarif-export: nuclei.sarif
+          template-exclusions: dos,intrusive
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: nuclei.sarif
+          category: nuclei
+
+  dast-zap-baseline:
+    name: dast-zap-baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ZAP baseline (passive)
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: ${{ inputs.preview_url }}
+          cmd_options: '-a -j -m 5'
+          fail_action: ${{ inputs.fail_on_findings }}
+          artifact_name: zap-baseline-${{ github.run_id }}
+
+  comment-pr:
+    name: comment-pr
+    needs: [dast-nuclei, dast-zap-baseline]
+    if: github.event_name == 'pull_request' && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post DAST summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## 🛡️ DAST scan complete
+            | Tool | Status |
+            |------|--------|
+            | Nuclei | \`${{ needs.dast-nuclei.result }}\` |
+            | ZAP baseline | \`${{ needs.dast-zap-baseline.result }}\` |
+
+            Preview: ${{ inputs.preview_url }}
+            Full reports in the workflow artifacts.`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });

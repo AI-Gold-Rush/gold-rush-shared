@@ -1,0 +1,14 @@
+# Gold Rush osv-scanner configuration
+# https://google.github.io/osv-scanner/configuration/
+
+# Format:
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = "2026-06-01"
+# reason = "Short explanation. Reference GH issue."
+
+# Example (remove when real entries added):
+# [[IgnoredVulns]]
+# id = "GHSA-example"
+# ignoreUntil = "2026-12-31"
+# reason = "Dev-only dep, not in runtime bundle. Tracked in #123."

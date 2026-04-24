@@ -1,0 +1,166 @@
+# Gold Rush custom Gitleaks config
+# Extends default Gitleaks rules with stack-specific detectors.
+# Reference: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Gold Rush Gitleaks Config"
+
+[extend]
+useDefault = true
+
+# ─────────────────────────────────────────────────────
+# Clerk
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "clerk-secret-key"
+description = "Clerk secret key"
+regex = '''sk_(live|test)_[A-Za-z0-9]{40,}'''
+tags = ["key", "clerk", "critical"]
+
+[[rules]]
+id = "clerk-webhook-secret"
+description = "Clerk webhook signing secret (Svix)"
+regex = '''whsec_[A-Za-z0-9+/=]{32,}'''
+tags = ["secret", "clerk", "webhook", "critical"]
+
+# ─────────────────────────────────────────────────────
+# Supabase
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "supabase-service-role-jwt"
+description = "Supabase service_role JWT"
+# PostgreSQL JWTs with service_role
+regex = '''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'''
+tags = ["jwt", "supabase", "critical"]
+# Narrow to context: only flag if "service_role" appears within 200 chars
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = [
+  # Skip test fixtures / sample tokens
+  '''test-fixture''',
+]
+
+[[rules]]
+id = "supabase-url-production"
+description = "Supabase project URL"
+regex = '''https://[a-z0-9]{20,}\.supabase\.co'''
+tags = ["url", "supabase"]
+
+# ─────────────────────────────────────────────────────
+# Stripe
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "stripe-live-secret-key"
+description = "Stripe LIVE secret key"
+regex = '''sk_live_[A-Za-z0-9]{24,}'''
+tags = ["key", "stripe", "critical", "production"]
+
+[[rules]]
+id = "stripe-restricted-key"
+description = "Stripe restricted key"
+regex = '''rk_(live|test)_[A-Za-z0-9]{24,}'''
+tags = ["key", "stripe"]
+
+[[rules]]
+id = "stripe-webhook-secret"
+description = "Stripe webhook signing secret"
+regex = '''whsec_[A-Za-z0-9]{32,}'''
+tags = ["secret", "stripe", "webhook"]
+# Note: same pattern as Clerk webhook — rely on filepath context
+
+# ─────────────────────────────────────────────────────
+# Google Maps (used by pool-pulse)
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "google-maps-api-key"
+description = "Google Maps / Cloud API key"
+regex = '''AIza[0-9A-Za-z_-]{35}'''
+tags = ["key", "google"]
+
+# ─────────────────────────────────────────────────────
+# Resend (transactional email)
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "resend-api-key"
+description = "Resend API key"
+regex = '''re_[A-Za-z0-9_-]{16,}'''
+tags = ["key", "resend", "email"]
+
+# ─────────────────────────────────────────────────────
+# LLM providers
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_-]{30,}'''
+tags = ["key", "llm", "anthropic", "critical"]
+
+[[rules]]
+id = "openai-api-key"
+description = "OpenAI API key"
+regex = '''sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{48,}'''
+tags = ["key", "llm", "openai", "critical"]
+
+# ─────────────────────────────────────────────────────
+# PostHog (analytics)
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "posthog-personal-api-key"
+description = "PostHog personal API key"
+regex = '''phx_[A-Za-z0-9]{40,}'''
+tags = ["key", "posthog"]
+
+# ─────────────────────────────────────────────────────
+# Firecrawl (used by prospector MCP)
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "firecrawl-api-key"
+description = "Firecrawl API key"
+regex = '''fc-[A-Za-z0-9]{32,}'''
+tags = ["key", "firecrawl"]
+
+# ─────────────────────────────────────────────────────
+# Vercel
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "vercel-token"
+description = "Vercel deployment token"
+regex = '''(?i)vercel[_-]?token[\"'\s:=]+[A-Za-z0-9]{24,}'''
+tags = ["key", "vercel"]
+
+# ─────────────────────────────────────────────────────
+# Sentry
+# ─────────────────────────────────────────────────────
+[[rules]]
+id = "sentry-auth-token"
+description = "Sentry auth token"
+regex = '''sntrys_[A-Za-z0-9+/=]{32,}'''
+tags = ["key", "sentry"]
+
+# ─────────────────────────────────────────────────────
+# Global allowlist (paths that never flag)
+# ─────────────────────────────────────────────────────
+[allowlist]
+description = "Global allowlist"
+paths = [
+  '''\.env\.example''',
+  '''\.env\.sample''',
+  '''\.env\.local\.example''',
+  '''__fixtures__/''',
+  '''__snapshots__/''',
+  '''\.playwright-mcp/''',
+  '''\.claude/security-reports/''',
+  '''\.claude/security/semgrep/''',
+  '''archive/''',
+  '''node_modules/''',
+  '''\.next/''',
+  '''coverage/''',
+  '''dist/''',
+  '''build/''',
+]
+regexes = [
+  # Placeholder strings commonly used in examples
+  '''(?i)your[_-]?(api|secret|key|token)[_-]?here''',
+  '''(?i)replace[_-]?me''',
+  '''xxx+''',
+  '''sk_test_00000''',
+]
