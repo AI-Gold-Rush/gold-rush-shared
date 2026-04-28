@@ -47,9 +47,9 @@ jobs:
       - name: Checkout shared configs
         uses: actions/checkout@v4
         with:
-          repository: rich1edwards/gold-rush-shared
+          repository: AI-Gold-Rush/gold-rush-shared
           path: .shared
-          ref: main
+          ref: ${{ github.sha }}
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -82,9 +82,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: rich1edwards/gold-rush-shared
+          repository: AI-Gold-Rush/gold-rush-shared
           path: .shared
-          ref: main
+          ref: ${{ github.sha }}
       - name: Run Semgrep
         env:
           SEMGREP_RULES: >-
@@ -126,9 +126,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: rich1edwards/gold-rush-shared
+          repository: AI-Gold-Rush/gold-rush-shared
           path: .shared
-          ref: main
+          ref: ${{ github.sha }}
       - name: Run osv-scanner
         uses: google/osv-scanner-action/osv-scanner-action@v1.9.0
         with:
