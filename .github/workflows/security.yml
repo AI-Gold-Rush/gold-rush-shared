@@ -1,5 +1,14 @@
 name: Security (reusable)
 
+# Followups F1+F2 (post-3.5g):
+#  F1 — Drop SARIF/code-scanning upload. gold-rush-ops is a private repo
+#       without GitHub Advanced Security; SARIF upload to code-scanning
+#       was failing. Replaced with artifact upload of raw JSON/SARIF
+#       reports — visible in run logs and downloadable for triage.
+#  F2 — Replace gitleaks/gitleaks-action@v2 (which requires a paid
+#       GITLEAKS_LICENSE for org repos) with vanilla zricethezav/gitleaks
+#       Docker invocation. Same scanner, same config, no license gate.
+
 on:
   workflow_call:
     inputs:
@@ -30,7 +39,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   pull-requests: write
   actions: read
 
@@ -52,11 +60,28 @@ jobs:
           repository: AI-Gold-Rush/gold-rush-shared
           path: .shared
           ref: main
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .shared/security/gitleaks.toml
+      # F2 — vanilla gitleaks via Docker (no GITLEAKS_LICENSE required).
+      - name: Run gitleaks (Docker)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            -w /repo \
+            zricethezav/gitleaks:latest \
+            detect \
+              --source=/repo \
+              --config=/repo/.shared/security/gitleaks.toml \
+              --report-format=json \
+              --report-path=/repo/gitleaks.report.json \
+              --redact \
+              --no-banner \
+              --exit-code=1
+      - name: Upload gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks.report.json
+          if-no-files-found: ignore
 
   secrets-trufflehog:
     name: secrets-trufflehog
@@ -98,12 +123,17 @@ jobs:
             p/nextjs
             p/react
             .shared/security/semgrep/gold-rush-rules.yml
-        run: semgrep ci --sarif --output=semgrep.sarif
-      - uses: github/codeql-action/upload-sarif@v3
+        # F1 — emit JSON for artifact upload instead of SARIF for
+        # code-scanning. SARIF/code-scanning requires GitHub Advanced
+        # Security on private repos.
+        run: semgrep ci --json --output=semgrep.json
+      - name: Upload Semgrep report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: semgrep.sarif
-          category: semgrep
+          name: semgrep-report
+          path: semgrep.json
+          if-no-files-found: ignore
 
   # ─── Tier 1: SCA (JS/TS) ────────────────────────────────────
   sca-npm-audit:
@@ -166,20 +196,23 @@ jobs:
     if: inputs.enable_trivy && inputs.stack != 'docs'
     steps:
       - uses: actions/checkout@v4
+      # F1 — emit JSON instead of SARIF; code-scanning upload removed.
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
-          format: sarif
-          output: trivy.sarif
+          format: json
+          output: trivy.json
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-      - uses: github/codeql-action/upload-sarif@v3
+      - name: Upload Trivy report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: trivy.sarif
-          category: trivy
+          name: trivy-report
+          path: trivy.json
+          if-no-files-found: ignore
 
   # ─── Tier 3: DAST (optional, requires preview URL) ──────────
   dast-zap:
