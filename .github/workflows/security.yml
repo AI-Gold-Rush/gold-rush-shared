@@ -44,6 +44,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Batch 3.5f-pre — diagnostic: dump workflow_ref/sha to verify G1 hypothesis
+      # (does ${{ github.workflow_ref }} expose the pinned SHA after @?)
+      # Decision gate for 3.5f-main: if extracted=<pinned-sha>, refactor; else pivot to G3.
+      - name: 3.5f-pre — dump workflow context for R2 diagnostic
+        run: |
+          echo "::notice::workflow_ref=${{ github.workflow_ref }}"
+          echo "::notice::workflow_sha=${{ github.workflow_sha }}"
+          echo "::notice::sha=${{ github.sha }}"
+          echo "::notice::ref_name=${{ github.ref_name }}"
+      - name: 3.5f-pre — extract SHA after @
+        run: |
+          REF='${{ github.workflow_ref }}'
+          echo "::notice::extracted=${REF##*@}"
       - id: app-token
         name: Mint App token (scope gold-rush-shared)
         uses: actions/create-github-app-token@21cfef2b496dd8ef5b904c159339626a10ad380e # v1.11.6 (Annex B / D-2026-04-24-001)
