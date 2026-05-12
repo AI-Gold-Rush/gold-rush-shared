@@ -53,6 +53,20 @@ id = "supabase-url-production"
 description = "Supabase project URL"
 regex = '''https://[a-z0-9]{20,}\.supabase\.co'''
 tags = ["url", "supabase"]
+# Public Supabase project URLs (e.g. `https://<ref>.supabase.co`) are not
+# secrets — they ship in every browser request the app makes and are
+# protected by per-environment anon keys + RLS. They appear in
+# product-catalog claim files as `connect_hint` / `urls.supabase` metadata
+# describing where the deployed app talks to Supabase. Allowlist them in
+# claim files only; everywhere else this rule still fires.
+# `product-catalog/claims/...` matches monorepo-root scans;
+# `claims/...` matches sub-repo scans where SCAN_ROOT == product-catalog.
+[[rules.allowlists]]
+description = "Public Supabase project URLs in product-catalog claim files are non-secret connect-hint metadata"
+paths = [
+  '''(^|/)product-catalog/claims/[A-Za-z0-9._-]+\.json$''',
+  '''(^|/)claims/[A-Za-z0-9._-]+\.json$''',
+]
 
 # ─────────────────────────────────────────────────────
 # Stripe
